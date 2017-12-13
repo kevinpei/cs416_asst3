@@ -20,10 +20,10 @@ typedef struct inode_
 {
     int mode; // 0 for free inode, 1 for inode, 2 for pnode
     uid_t owner; // owner id
-    int timestamp; // last modified date
-    int size_block_count; // number of blocks used by this file
+    time_t timestamp; // last modified date
+    blkcnt_t size_block_count; // number of blocks used by this file
     char file_path[PATH_MAX]; // full path of the file
-    int direct_blocks[(BLOCK_SIZE/sizeof(int)) - 6 - PATH_MAX/(sizeof(int)/sizeof(char))]; // indexes of blocks used by this file
+    int direct_blocks[(BLOCK_SIZE/sizeof(int)) - 4 - sizeof(uid_t) - sizeof(time_t) - sizeof(blkcnt_t) - PATH_MAX/(sizeof(int)/sizeof(char))]; // indexes of blocks used by this file
 	int double_direct_blocks; // index of a pnode
     int triple_direct_blocks; // index of a pnode containing a list of another pnode
 } inode;
