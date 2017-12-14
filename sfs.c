@@ -30,6 +30,8 @@
 #include "log.h"
 #include "sfs.h"
 
+static uint64_t file_handle = 0;
+
 //Helper functions
 
 //A function to get the Inode corresponding to the given path.
@@ -38,19 +40,17 @@
 int getINode(char* path) {
 	char* node = malloc(BLOCK_SIZE);
 	int i = 0;
-	disk_open(FS_FILE);
 	while (i < INODE_NUMBER) {
 		block_read(i, node);
 		//Make sure it's an Inode, the file path is the same as the one given, and that the owner is the current user
 		if (((Inode*)node)->mode == 1 && strncmp(((Inode*)node)->file_path, path, PATH_MAX) == 0 && ((Inode*)node)->owner == getuid()&& ((Inode*)node)->groupid == getgid()) {
 			free(node);
-			disk_close();
+			
 			return i;
 		}
 		i++;
 	}
 	free(node);
-	disk_close();
 	return -1;
 }
 
@@ -58,13 +58,12 @@ int getINode(char* path) {
 int getFirstFreeBlock() {
 	int currentBlock = INODE_NUMBER + 1;
 	char* block = malloc(BLOCK_SIZE);
-	disk_open(FS_FILE);
 	block_read(currentBlock, block);
-	while (((dataNode*)block)->isFree == 1) {
+	while (((dataNode*)block)->isUsed == 1) {
 		currentBlock++;
 		block_read(currentBlock, block);
 	}
-	disk_close();
+	
 	free(block);
 	return currentBlock;
 }
@@ -73,13 +72,13 @@ int getFirstFreeBlock() {
 int getFirstFreeNode() {
 	int currentBlock = 0;
 	char* block = malloc(BLOCK_SIZE);
-	disk_open(FS_FILE);
+
 	block_read(currentBlock, block);
 	while (((Inode*)block)->mode != 0 && currentBlock < 30000) {
 		currentBlock++;
 		block_read(currentBlock, block);
 	}
-	disk_close();
+	
 	free(block);
 	if (currentBlock >= 30000) {
 		printf("No more free nodes\n");
@@ -288,13 +287,12 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 		newfile->groupid = getgid();
 		newfile->permissions = mode;
 		newfile->timestamp = time( NULL );
-		newfile->size_block_count = 0;
 		newfile->filesize = 0;
 		strncpy(newfile->file_path, path, PATH_MAX); 
 		
 		disk_open(FS_FILE);
 		block_write(firstFreeNode, newfile);
-		disk_close();
+		
 		free(newfile);
 	}
 	
@@ -309,7 +307,55 @@ int sfs_unlink(const char *path)
     int retstat = 0;
     log_msg("sfs_unlink(path=\"%s\")\n", path);
 
-    
+    Inode *inode = get_inode(path);
+    int k;
+    char buffer[BLOCK_SIZE];
+    bzero(buffer, BLOCK_SIZE);
+    for (k = 0; k < sizeof(inode->direct_blocks) / sizeof(int); k++)
+    {
+        if (inode->direct_blocks[k] != 0)
+        {
+            block_write(inode->direct_blocks[k], buffer);
+        }
+    }
+
+    if (inode->single_indirect_blocks != 0)
+    {
+        char buffer[BLOCK_SIZE];
+        block_read(inode->single_indirect_blocks, buffer);
+        Pnode *direct_pnode = (Pnode *)buffer;
+        for (k = 0; k < sizeof(direct_pnode->direct_blocks) / sizeof(int); k++)
+        {
+            if (direct_pnode->direct_blocks[k] != 0)
+            {
+                block_write(inode->direct_blocks[k], buffer);
+            }
+        }
+    }
+
+    if (inode->double_indirect_blocks != 0)
+    {
+        char buffer[BLOCK_SIZE];
+        block_read(inode->double_indirect_blocks, buffer);
+        Pnode *single_indirect_pnode = (Pnode *)buffer;
+        for (k = 0; k < sizeof(single_indirect_pnode->direct_blocks) / sizeof(int); k++)
+        {
+            if (single_indirect_pnode->direct_blocks[k] != 0)
+            {
+                char buffer[BLOCK_SIZE];
+                block_read(single_indirect_pnode->direct_blocks[k], buffer);
+                Pnode *direct_pnode = (Pnode *)buffer;
+                for (k = 0; k < sizeof(direct_pnode->direct_blocks) / sizeof(int); k++)
+                {
+                    if (direct_pnode->direct_blocks[k] != 0)
+                    {
+                        block_write(inode->direct_blocks[k], buffer);
+                    }
+                }
+            }
+        }
+    }
+
     return retstat;
 }
 
@@ -327,9 +373,20 @@ int sfs_open(const char *path, struct fuse_file_info *fi)
 {
     int retstat = 0;
     log_msg("\nsfs_open(path\"%s\", fi=0x%08x)\n",
-	    path, fi);
+            path, fi);
 
-    
+    Inode *inode = get_inode(path);
+    if (path[strlen(path) - 1] == '/')
+    {
+        fi->nonseekable = 1;
+    }
+    fi->lock_owner = inode->owner;
+    if (fi->fh == 0)
+    {
+        file_handle++;
+        fi->fh = file_handle;
+    }
+
     return retstat;
 }
 
@@ -449,7 +506,7 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 		block_number++;
 		free(block);
 	}
-	disk_close();
+	
 	free(node);
 	
     return retstat;
@@ -470,7 +527,87 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
     log_msg("\nsfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
 	    path, buf, size, offset, fi);
     
-    
+    //Get the Inode corresponding to the given path.
+	int nodeBlock = getINode(path);
+	if (nodeBlock < 0) {
+		printf("File not found\n");
+		return -1;
+	}
+	char* node = malloc(BLOCK_SIZE);
+	disk_open(FS_FILE);
+	block_read(nodeBlock, node);
+	
+	//Which block to write to and where to start in that block
+	int block_number = offset/data_size;
+	int block_offset = offset%data_size;
+	
+	int size_remaining = size;
+	/*
+	//Repeatedly write until no bytes are left to be written.
+	while (size_remaining > 0) {
+		int write_amount = data_size - block_offset;
+		if (size_remaining < write_amount) {
+			write_amount = size_remaining;
+		}
+		
+		//If the block number is greater than the number of blocks in the Inode, go to the first indirect block
+		if (block_number > direct_blocks_Inode) {
+			//If the block number is greater than the number of blocks in the Inode and the first indirect block, go to the second indirect block
+			if (block_number > direct_blocks_Inode + direct_blocks_Pnode) {
+				//Used to determine which Pnode in the double indirect blocks to start at.
+				int indirect_Pnode_number = (block_number - direct_blocks_Inode - direct_blocks_Pnode)/direct_blocks_Pnode;
+				if(indirect_Pnode_number > direct_blocks_Pnode) {
+					//Ran out of memory. No file can be this big. Just return.
+					printf("EOF\n");
+					size_remaining = 0;
+				//Used to determine the block within the Pnode to start at
+				} else {
+					//First, store the indirect Pnode
+					char* first_p_node = malloc(BLOCK_SIZE);
+					block_read(((Inode*)node)->double_indirect_blocks, first_p_node);
+					//Then store the indirect Pnode that's pointed to by that Pnode
+					char* second_p_node = malloc(BLOCK_SIZE);
+					block_read(((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number], second_p_node);
+					//Select which block to read from the second indirect Pnode
+					int indirect_Pnode_block = (block_number - direct_blocks_Inode - direct_blocks_Pnode)%direct_blocks_Pnode;
+					block_read(((Pnode*)second_p_node)->direct_blocks[indirect_Pnode_block], block);
+					
+					free(second_p_node);
+					free(first_p_node);
+				}
+			} else {
+				if (((Inode*)node)->single_indirect_blocks == 0) {
+					Pnode* pnode = malloc(BLOCK_SIZE);
+					pnode->mode = 2;
+					
+				}
+				char* p_node = malloc(BLOCK_SIZE);
+				block_read(((Inode*)node)->single_indirect_blocks, p_node);
+				block_read(((Pnode*)p_node)->direct_blocks[block_number - direct_blocks_Inode], block);
+				free(p_node);
+			}
+		} else {
+			//Read the currently stored block and write over it.
+			dataNode* block = malloc(BLOCK_SIZE);
+			block_read(((Inode*)node)->direct_blocks[block_number], block);
+			block->isUsed = 1;
+			strncpy(block, buf + (size - size_remaining), write_amount);
+			block_write(((Inode*)node)->direct_blocks[block_number], block);
+			free(block);
+		}
+		//If the end of the file hasn't been reached yet, continue as normal.
+		int file_remaining = data_size - block_offset;
+		
+		//Otherwise, only copy as much data as there is left in the file.
+		if (((Inode*)node)->filesize < (block_number * data_size) + data_size) {
+			file_remaining = ((Inode*)node)->filesize - (block_number * data_size) - block_offset;
+			//Stop reading from file.
+			size_remaining = 0;
+		}
+		
+	}
+	*/
+
     return retstat;
 }
 

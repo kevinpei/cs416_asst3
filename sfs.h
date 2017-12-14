@@ -9,7 +9,7 @@
 #define PATH_MAX 256 // max length of full file path
 #define INODE_NUMBER 30000 // number of inode allowed
 //Defining the size of various things
-#define direct_blocks_Inode ((BLOCK_SIZE - 4 * sizeof(int) - sizeof(mode_t) - sizeof(size_t) - sizeof(uid_t) - sizeof(gid_t) - sizeof(time_t) - sizeof(blkcnt_t) - PATH_MAX * sizeof(char)) / sizeof(int))
+#define direct_blocks_Inode ((BLOCK_SIZE - 4 * sizeof(int) - sizeof(mode_t) - sizeof(size_t) - sizeof(uid_t) - sizeof(gid_t) - sizeof(time_t) - PATH_MAX * sizeof(char)) / sizeof(int))
 #define direct_blocks_Pnode ((BLOCK_SIZE/sizeof(int)) - 1)
 #define data_size ((BLOCK_SIZE - sizeof(char)) / sizeof(char))
 
@@ -27,7 +27,6 @@ typedef struct inode_
     uid_t owner; // owner id
 	gid_t groupid; //Group id
     time_t timestamp; // last modified date
-    blkcnt_t size_block_count; // number of blocks used by this file
 	size_t filesize;
     char file_path[PATH_MAX]; // full path of the file
     int direct_blocks[direct_blocks_Inode]; // indexes of blocks used by this file
@@ -37,7 +36,7 @@ typedef struct inode_
 
 typedef struct dataNode_
 {
-	char isFree; //0 for free data, 1 for used data
+	char isUsed; //0 for free data, 1 for used data
 	char data[data_size]; //The rest of the bytes are for storing actual data
 } dataNode;
 
