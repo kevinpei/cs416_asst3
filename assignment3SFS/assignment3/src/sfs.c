@@ -265,25 +265,14 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n",
             path, statbuf);
 
-    int dir = 0;
-    char *c;
-    char *tmp;
-    while ((c = strchr(path, '.')) != NULL)
+    if (statbuf->st_mode == S_IFREG)
     {
-        printf("is dir\n");
-        dir = 1;
-        tmp = path;
-        char buffer[PATH_MAX];
-        bzero(buffer, PATH_MAX);
-        strncpy(buffer, path, (strlen(path) - strlen(c)));
-        strcat(buffer, c + 1);
-        bzero(tmp, strlen(tmp));
-        strcpy(tmp, buffer);
+        printf("it's a file\n");
     }
-    if (dir == 1)
+
+    if (statbuf->st_mode == S_IFDIR)
     {
-        printf("add /\n");
-        strcat(tmp, "/");
+        printf("it's a directory\n");
     }
 
     Inode *file_info = get_inode(path);
@@ -291,7 +280,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     {
         if (path[strlen(path) - 1] == '/')
         {
-            retstat = sfs_mkdir(path, 777);
+            sfs_mkdir(path, 777);
         }
         else
         {
@@ -944,10 +933,7 @@ int sfs_mkdir(const char *path, mode_t mode)
     // record the file in the directory
     char dir_name[PATH_MAX];
     bzero(dir_name, PATH_MAX);
-    char *tmp = path;
-    tmp[strlen(path) - 1] = '.';
     strncpy(dir_name, path, (strrchr(path, '/') - path + 1));
-    tmp[strlen(path) - 1] = '/';
     // printf("create file in directory: %s\n", dir_name);
     Inode *dir_node = get_inode(dir_name);
     int k;
@@ -1100,14 +1086,7 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
             // getchar();
             char file_name[PATH_MAX];
             bzero(file_name, PATH_MAX);
-            if (file_info->file_path[strlen(file_info->file_path) - 1] == '/')
-            {
-                strncpy(file_name, file_info->file_path + strlen(path), strlen(file_info->file_path) - strlen(path) - 1);
-            }
-            else
-            {
-                strncpy(file_name, file_info->file_path + strlen(path), strlen(file_info->file_path) - strlen(path));
-            }
+            strncpy(file_name, file_info->file_path + strlen(path), strlen(file_info->file_path) - strlen(path));
             printf("about to fill file \"%s\"\n", file_name);
             int retval = filler(buf, file_name, NULL, offset);
             if (retval == 1)
