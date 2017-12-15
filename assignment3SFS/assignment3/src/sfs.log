@@ -1,0 +1,157 @@
+
+sfs_init()
+    conn:
+    proto_major = 7
+    proto_minor = 22
+    async_read = 1
+    max_write = 131072
+    max_readahead = 131072
+    capable = 00000ffb
+    want = 00000010
+    context:
+    fuse = 01c244b0
+    uid = 0
+    gid = 0
+    pid = 0
+    private_data = 01c24010
+    logfile = 01c24030
+    diskfile = /tmp/ksp98/testfsfile
+    umask = 00000
+
+sfs_getattr(path="/", statbuf=0x26f45c10)
+
+sfs_getattr(path="/gaha", statbuf=0x26f45c40)
+
+sfs_create(path="/gaha", mode=01411, fi=0x18000aa0)
+
+sfs_release(path="/gaha", fi=0x18000aa0)
+
+sfs_getattr(path="/gaha", statbuf=0x26f45c40)
+
+sfs_open(path"/gaha", fi=0x27746cf0)
+
+sfs_release(path="/gaha", fi=0x27746cf0)
+
+sfs_opendir(path="/", fi=0x26f45c30)
+
+sfs_readdir(path="/", buf=0x18000990, filler=0x27f32510, offset=0, fi=0x27746c30)
+
+sfs_getattr(path="/gaha", statbuf=0x26f45c40)
+
+sfs_releasedir(path="/", fi=0x27746c40)
+
+sfs_getattr(path="/gaha", statbuf=0x26f45c40)
+
+sfs_open(path"/gaha", fi=0x27746cf0)
+
+sfs_write(path="/gaha", buf=0x28333060, size=5, offset=0, fi=0x26f45d70)
+New filesize is 5
+Test gaha
+
+wrote 5 bytes 
+
+sfs_release(path="/gaha", fi=0x27746cf0)
+
+sfs_getattr(path="/gaha", statbuf=0x26f45c40)
+
+sfs_open(path"/gaha", fi=0x27746cf0)
+
+sfs_read(path="/gaha", buf=0x18000d30, size=4096, offset=0, fi=0x26f45cf0)
+block number is 0
+file size is 5
+Read size is 5
+The block is gaha
+
+The modified block is gaha
+
+The buffer is gaha
+
+
+sfs_getattr(path="/gaha", statbuf=0x27746c10)
+
+sfs_release(path="/gaha", fi=0x26f45cf0)
+
+sfs_getattr(path="/gaha", statbuf=0x27746c40)
+
+sfs_open(path"/gaha", fi=0x26f45cf0)
+
+sfs_write(path="/gaha", buf=0x28362060, size=5, offset=5, fi=0x27746d70)
+New filesize is 10
+Test gaha
+gaha
+
+wrote 5 bytes 
+
+sfs_release(path="/gaha", fi=0x26f45cf0)
+
+sfs_getattr(path="/gaha", statbuf=0x27746c40)
+
+sfs_open(path"/gaha", fi=0x26f45cf0)
+
+sfs_read(path="/gaha", buf=0x20000f80, size=4096, offset=0, fi=0x27746cf0)
+block number is 0
+file size is 10
+Read size is 10
+The block is gaha
+gaha
+
+The modified block is gaha
+gaha
+
+The buffer is gaha
+gaha
+
+
+sfs_getattr(path="/gaha", statbuf=0x26f45c10)
+
+sfs_release(path="/gaha", fi=0x27746cf0)
+
+sfs_getattr(path="/gaha", statbuf=0x26f45c40)
+
+sfs_open(path"/gaha", fi=0x27746cf0)
+
+sfs_write(path="/gaha", buf=0x28333060, size=18, offset=10, fi=0x26f45d70)
+New filesize is 28
+Test gaha
+gaha
+kdgjaogofdngosgod
+
+wrote 18 bytes 
+
+sfs_release(path="/gaha", fi=0x27746cf0)
+
+sfs_getattr(path="/gaha", statbuf=0x26f45c40)
+
+sfs_open(path"/gaha", fi=0x27746cf0)
+
+sfs_read(path="/gaha", buf=0x18000f40, size=4096, offset=0, fi=0x26f45cf0)
+block number is 0
+file size is 28
+Read size is 28
+The block is gaha
+gaha
+kdgjaogofdngosgod
+
+The modified block is gaha
+gaha
+kdgjaogofdngosgod
+
+The buffer is gaha
+gaha
+kdgjaogofdngosgod
+
+
+sfs_getattr(path="/gaha", statbuf=0x27746c10)
+
+sfs_release(path="/gaha", fi=0x26f45cf0)
+
+sfs_getattr(path="/gaha", statbuf=0x27746c40)
+sfs_unlink(path="/gaha")
+
+sfs_opendir(path="/", fi=0x26f45c30)
+
+sfs_readdir(path="/", buf=0x18000990, filler=0x27f32510, offset=0, fi=0x27746c30)
+
+sfs_releasedir(path="/", fi=0x27746c40)
+
+sfs_destroy(userdata=0x01c24010)
