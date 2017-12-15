@@ -712,6 +712,7 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
         if (inode->direct_blocks[k] != 0)
         {
             char buffer[BLOCK_SIZE];
+            bzero(buffer, BLOCK_SIZE);
             block_read(inode->direct_blocks[k], buffer);
             Inode *file_info = (Inode *)buffer;
             // printf("file found. print inode:\n");
@@ -721,53 +722,58 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
             retstat = get_file_stat(file_info, statbuf);
             // printf("about to fill from direct blocks\n");
             // getchar();
-            filler(buf, file_info->file_path, statbuf, 0);
+            filler(buf, file_info->file_path, NULL, 0);
         }
     }
 
     if (inode->single_indirect_blocks != 0)
     {
-        char buffer[BLOCK_SIZE];
-        block_read(inode->single_indirect_blocks, buffer);
-        Pnode *direct_pnode = (Pnode *)buffer;
+        char direct_pnode_buffer[BLOCK_SIZE];
+        bzero(direct_pnode_buffer, BLOCK_SIZE);
+        block_read(inode->single_indirect_blocks, direct_pnode_buffer);
+        Pnode *direct_pnode = (Pnode *)direct_pnode_buffer;
         for (k = 0; k < sizeof(direct_pnode->direct_blocks) / sizeof(int); k++)
         {
             if (direct_pnode->direct_blocks[k] != 0)
             {
                 char buffer[BLOCK_SIZE];
+                bzero(buffer, BLOCK_SIZE);
                 block_read(direct_pnode->direct_blocks[k], buffer);
                 Inode *file_info = (Inode *)buffer;
                 char statbuf[sizeof(struct stat)];
                 bzero(statbuf, sizeof(struct stat));
                 retstat = get_file_stat(file_info, statbuf);
-                filler(buf, file_info->file_path, statbuf, 0);
+                filler(buf, file_info->file_path, NULL, 0);
             }
         }
     }
 
     if (inode->double_indirect_blocks != 0)
     {
-        char buffer[BLOCK_SIZE];
-        block_read(inode->double_indirect_blocks, buffer);
-        Pnode *single_indirect_pnode = (Pnode *)buffer;
+        char single_indirect_pnode_buffer[BLOCK_SIZE];
+        bzero(single_indirect_pnode_buffer, BLOCK_SIZE);
+        block_read(inode->double_indirect_blocks, single_indirect_pnode_buffer);
+        Pnode *single_indirect_pnode = (Pnode *)single_indirect_pnode_buffer;
         for (k = 0; k < sizeof(single_indirect_pnode->direct_blocks) / sizeof(int); k++)
         {
             if (single_indirect_pnode->direct_blocks[k] != 0)
             {
-                char buffer[BLOCK_SIZE];
-                block_read(single_indirect_pnode->direct_blocks[k], buffer);
-                Pnode *direct_pnode = (Pnode *)buffer;
+                char direct_pnode_buffer[BLOCK_SIZE];
+                bzero(direct_pnode_buffer, BLOCK_SIZE);
+                block_read(single_indirect_pnode->direct_blocks[k], direct_pnode_buffer);
+                Pnode *direct_pnode = (Pnode *)direct_pnode_buffer;
                 for (k = 0; k < sizeof(direct_pnode->direct_blocks) / sizeof(int); k++)
                 {
                     if (direct_pnode->direct_blocks[k] != 0)
                     {
                         char buffer[BLOCK_SIZE];
+                        bzero(buffer, BLOCK_SIZE);
                         block_read(direct_pnode->direct_blocks[k], buffer);
                         Inode *file_info = (Inode *)buffer;
                         char statbuf[sizeof(struct stat)];
                         bzero(statbuf, sizeof(struct stat));
                         retstat = get_file_stat(file_info, statbuf);
-                        filler(buf, file_info->file_path, statbuf, 0);
+                        filler(buf, file_info->file_path, NULL, 0);
                     }
                 }
             }
