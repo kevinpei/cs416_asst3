@@ -7,11 +7,6 @@
 
 */
 
-/*
-Made by Derek Mao, Kevin Pei, and Quzhi Li
-Tested on top.cs.rutgers.edu
-*/
-
 #include "params.h"
 #include "block.h"
 
@@ -68,7 +63,7 @@ int getFirstFreeBlock()
     char block[BLOCK_SIZE];
     bzero(block, BLOCK_SIZE);
     block_read(currentBlock, block);
-    while (((dataNode *)block)->isUsed == 1)
+    while (((dataNode *)block)->isFree == 1)
     {
         currentBlock++;
         block_read(currentBlock, block);
@@ -266,12 +261,15 @@ int sfs_getattr(const char *path, struct stat *statbuf)
             path, statbuf);
 
     int dir = 0;
+    if (path[strlen(path) - 1] == '.')
+    {
+        dir = 1;
+    }
     char *c;
     char *tmp;
     while ((c = strchr(path, '.')) != NULL)
     {
         printf("is dir\n");
-        dir = 1;
         tmp = path;
         char buffer[PATH_MAX];
         bzero(buffer, PATH_MAX);
@@ -562,7 +560,7 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
     int nodeBlock = getINode(path);
     if (nodeBlock < 0)
     {
-        log_msg("File not found\n");
+        printf("File not found\n");
         return -1;
     }
     char *node = malloc(BLOCK_SIZE);
@@ -570,7 +568,6 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 
     //Which block to read from and where to start in that block
     int block_number = offset / data_size;
-	log_msg("block number is %d\n", block_number);
     int block_offset = offset % data_size;
 
     int size_remaining = size;
@@ -578,7 +575,8 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
     //Repeatedly write into the buffer until there are no more bytes to read
     while (size_remaining > 0)
     {
-        dataNode *block = malloc(BLOCK_SIZE);
+        char *block = malloc(BLOCK_SIZE);
+        block_read(nodeBlock, node);
         //If the block number is greater than the number of blocks in the Inode, go to the first indirect block
         if (block_number > direct_blocks_Inode)
         {
@@ -623,26 +621,22 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
             block_read(((Inode *)node)->direct_blocks[block_number], block);
         }
         //If the end of the file hasn't been reached yet, continue as normal.
-        int read_size = data_size - block_offset;
-		
+        int file_remaining = data_size - block_offset;
+
         //Otherwise, only copy as much data as there is left in the file.
         if (((Inode *)node)->filesize < (block_number * data_size) + data_size)
         {
-			log_msg("file size is %d\n", ((Inode *)node)->filesize);
-            read_size = ((Inode *)node)->filesize - (block_number * data_size) - block_offset;
+            file_remaining = ((Inode *)node)->filesize - (block_number * data_size) - block_offset;
             //Stop reading from file.
             size_remaining = 0;
         }
-		log_msg("Read size is %d\n", read_size);
+
         //Copy the data from the data block starting from the offset into the buffer
         //You add sizeof(char) to account for the metadata in each data block.
-		log_msg("The block is %s\n", block);
-		log_msg("The modified block is %s\n", (char*)block + block_offset + sizeof(char));
-        strncpy((char*)buf + retstat, (char*)block + block_offset + sizeof(char), read_size);
-		log_msg("The buffer is %s\n", buf);
+        strncpy(buf + retstat, block + block_offset + sizeof(char), file_remaining);
         //Update the size remaining, bytes written, and the block offset
-        size_remaining -= read_size;
-        retstat += read_size;
+        size_remaining -= file_remaining;
+        retstat += file_remaining;
         //Block offset is by default 0
         block_offset = 0;
         block_number++;
@@ -663,255 +657,12 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
  * Changed in version 2.2
  */
 int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
-	     struct fuse_file_info *fi)
+              struct fuse_file_info *fi)
 {
     int retstat = 0;
     log_msg("\nsfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
-	    path, buf, size, offset, fi);
-    
-    //Get the Inode corresponding to the given path.
-	int nodeBlock = getINode(path);
-	if (nodeBlock < 0) {
-		log_msg("File not found\n");
-		return -1;
-	}
-	char* node = malloc(BLOCK_SIZE);
-	disk_open(FS_FILE);
-	block_read(nodeBlock, node);
-	
-	//Which block to write to and where to start in that block
-	int block_number = offset/data_size;
-	int block_offset = offset%data_size;
-	
-	int size_remaining = size;
-	
-	//Have to fill in the empty space if writing to an offset beyond EOF
-	if (offset > ((Inode*)node)->filesize) {
-		int i = 0;
-		while (i < block_number) {
-			int offset_amount = data_size;
-			if (i == block_number - 1) {
-				offset_amount = block_offset;
-			}
-			if (i > direct_blocks_Inode) {
-				if (i > direct_blocks_Inode + direct_blocks_Pnode) {
-					int indirect_Pnode_number = (i - direct_blocks_Inode - direct_blocks_Pnode)/direct_blocks_Pnode;
-					if(indirect_Pnode_number > direct_blocks_Pnode) {
-						//Ran out of memory. No file can be this big. Just return.
-						printf("EOF\n");
-						size_remaining = 0;
-						i = block_number;
-					//Used to determine the block within the Pnode to start at
-					} else {
-						//First, store the indirect Pnode
-						char* first_p_node = malloc(BLOCK_SIZE);
-						
-						if (((Inode*)node)->double_indirect_blocks == 0) {
-							Pnode* pnode = malloc(BLOCK_SIZE);
-							((Inode*)node)->double_indirect_blocks = getFirstFreeNode();
-							pnode->mode = 2;
-							block_write(((Inode*)node)->double_indirect_blocks, pnode);
-							free(pnode);
-						}
-						
-						block_read(((Inode*)node)->double_indirect_blocks, first_p_node);
-						//Then store the indirect Pnode that's pointed to by that Pnode
-						char* second_p_node = malloc(BLOCK_SIZE);
-						
-						if (((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number] == 0) {
-							Pnode* pnode = malloc(BLOCK_SIZE);
-							((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number] = getFirstFreeNode();
-							pnode->mode = 2;
-							block_write(((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number], pnode);
-							free(pnode);
-						}
-						
-						block_read(((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number], second_p_node);
-						
-						//Select which block to read from the second indirect Pnode
-						int indirect_Pnode_block = (block_number - direct_blocks_Inode - direct_blocks_Pnode)%direct_blocks_Pnode;
-						
-						if (((Pnode*)second_p_node)->direct_blocks[indirect_Pnode_block] == 0) {
-							dataNode* emptyData = malloc(BLOCK_SIZE);
-							emptyData->isUsed = 1;
-							((Pnode*)second_p_node)->direct_blocks[indirect_Pnode_block] = getFirstFreeBlock();
-							((Inode*)node)->filesize += offset_amount;
-							block_write(nodeBlock, node);
-							block_write(((Pnode*)second_p_node)->direct_blocks[indirect_Pnode_block], emptyData);
-							free(emptyData);
-						}
-						
-						free(second_p_node);
-						free(first_p_node);
-					}
-				} else {
-					if (((Inode*)node)->single_indirect_blocks == 0) {
-						Pnode* pnode = malloc(BLOCK_SIZE);
-						pnode->mode = 2;
-						((Inode*)node)->single_indirect_blocks = getFirstFreeNode();
-						block_write(((Inode*)node)->single_indirect_blocks, pnode);
-						free(pnode);
-					}
-					
-					char* p_node = malloc(BLOCK_SIZE);
-					block_read(((Inode*)node)->single_indirect_blocks, p_node);
-					
-					if (((Pnode*)p_node)->direct_blocks[i - direct_blocks_Inode] == 0) {
-						dataNode* emptyData = malloc(BLOCK_SIZE);
-						emptyData->isUsed = 1;
-						((Pnode*)p_node)->direct_blocks[i - direct_blocks_Inode] = getFirstFreeBlock();
-						((Inode*)node)->filesize += offset_amount;
-						block_write(nodeBlock, node);
-						block_write(((Pnode*)p_node)->direct_blocks[i - direct_blocks_Inode], emptyData);
-						free(emptyData);
-					}
-					free(p_node);
-				}
-			} else {
-				if (((Inode*)node)->direct_blocks[i] == 0) {
-					dataNode* emptyData = malloc(BLOCK_SIZE);
-					emptyData->isUsed = 1;
-					((Inode*)node)->direct_blocks[i] = getFirstFreeBlock();
-					((Inode*)node)->filesize += offset_amount;
-					block_write(nodeBlock, node);
-					block_write(((Inode*)node)->direct_blocks[i], emptyData);
-					free(emptyData);
-				}
-			}
-			i++;
-		}
-	}
-	
-	
-	//Repeatedly write until no bytes are left to be written.
-	while (size_remaining > 0) {
-		int write_amount = data_size - block_offset;
-		if (size_remaining < write_amount) {
-			write_amount = size_remaining;
-		}
-		
-		//If the block number is greater than the number of blocks in the Inode, go to the first indirect block
-		if (block_number > direct_blocks_Inode) {
-			//If the block number is greater than the number of blocks in the Inode and the first indirect block, go to the second indirect block
-			if (block_number > direct_blocks_Inode + direct_blocks_Pnode) {
-				//Used to determine which Pnode in the double indirect blocks to start at.
-				int indirect_Pnode_number = (block_number - direct_blocks_Inode - direct_blocks_Pnode)/direct_blocks_Pnode;
-				if(indirect_Pnode_number > direct_blocks_Pnode) {
-					//Ran out of memory. No file can be this big. Just return.
-					log_msg("EOF\n");
-					size_remaining = 0;
-				//Used to determine the block within the Pnode to start at
-				} else {
-					//First, store the indirect Pnode
-					char* first_p_node = malloc(BLOCK_SIZE);
-					
-					if (((Inode*)node)->double_indirect_blocks == 0) {
-						Pnode* pnode = malloc(BLOCK_SIZE);
-						((Inode*)node)->double_indirect_blocks = getFirstFreeNode();
-						pnode->mode = 2;
-						block_write(((Inode*)node)->double_indirect_blocks, pnode);
-						free(pnode);
-					}
-					
-					block_read(((Inode*)node)->double_indirect_blocks, first_p_node);
-					//Then store the indirect Pnode that's pointed to by that Pnode
-					char* second_p_node = malloc(BLOCK_SIZE);
-					
-					if (((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number] == 0) {
-						Pnode* pnode = malloc(BLOCK_SIZE);
-						((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number] = getFirstFreeNode();
-						pnode->mode = 2;
-						block_write(((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number], pnode);
-						free(pnode);
-					}
-					
-					block_read(((Pnode*)first_p_node)->direct_blocks[indirect_Pnode_number], second_p_node);
-					
-					//Select which block to read from the second indirect Pnode
-					int indirect_Pnode_block = (block_number - direct_blocks_Inode - direct_blocks_Pnode)%direct_blocks_Pnode;
-					
-					if (((Pnode*)second_p_node)->direct_blocks[indirect_Pnode_block] == 0) {
-						((Pnode*)second_p_node)->direct_blocks[indirect_Pnode_block] = getFirstFreeBlock();
-					}
-					
-					if (block_number * data_size + block_offset + write_amount > ((Inode*)node)->filesize) {
-						((Inode*)node)->filesize = block_number * data_size + block_offset + write_amount;
-						log_msg("New filesize is %d\n", ((Inode*)node)->filesize);
-						block_write(nodeBlock, node);
-					}
-					
-					dataNode* block = malloc(BLOCK_SIZE);
-					block_read(((Pnode*)second_p_node)->direct_blocks[indirect_Pnode_block], block);
-					block->isUsed = 1;
-					strncpy((char*)block->data + block_offset, buf + (size - size_remaining), write_amount);
-					block_write(((Pnode*)second_p_node)->direct_blocks[indirect_Pnode_block], block);
-					free(block);
-					
-					free(second_p_node);
-					free(first_p_node);
-				}
-			} else {
-				
-				if (((Inode*)node)->single_indirect_blocks == 0) {
-					Pnode* pnode = malloc(BLOCK_SIZE);
-					pnode->mode = 2;
-					((Inode*)node)->single_indirect_blocks = getFirstFreeNode();
-					block_write(((Inode*)node)->single_indirect_blocks, pnode);
-					free(pnode);
-				}
-				
-				char* p_node = malloc(BLOCK_SIZE);
-				block_read(((Inode*)node)->single_indirect_blocks, p_node);
-				
-				if (((Pnode*)p_node)->direct_blocks[block_number - direct_blocks_Inode] == 0) {
-					((Pnode*)p_node)->direct_blocks[block_number - direct_blocks_Inode] = getFirstFreeBlock();
-				}
-				
-				if (block_number * data_size + block_offset + write_amount > ((Inode*)node)->filesize) {
-					((Inode*)node)->filesize = block_number * data_size + block_offset + write_amount;
-					log_msg("New filesize is %d\n", ((Inode*)node)->filesize);
-					block_write(nodeBlock, node);
-				}
-				
-				dataNode* block = malloc(BLOCK_SIZE);
-				block_read(((Pnode*)p_node)->direct_blocks[block_number - direct_blocks_Inode], block);
-				block->isUsed = 1;
-				strncpy((char*)block->data + block_offset, buf + (size - size_remaining), write_amount);
-				block_write(((Pnode*)p_node)->direct_blocks[block_number - direct_blocks_Inode], block);
-				free(block);
-				free(p_node);
-			}
-		} else {
-			//Read the currently stored block and write over it.
-			dataNode* block = malloc(BLOCK_SIZE);
-			if (((Inode*)node)->direct_blocks[block_number] == 0) {
-				((Inode*)node)->direct_blocks[block_number] = getFirstFreeBlock();
-			}
-			
-			if (block_number * data_size + block_offset + write_amount > ((Inode*)node)->filesize) {
-				((Inode*)node)->filesize = block_number * data_size + block_offset + write_amount;
-				log_msg("New filesize is %d\n", ((Inode*)node)->filesize);
-				block_write(nodeBlock, node);
-			}
-			
-			block_read(((Inode*)node)->direct_blocks[block_number], block);
-			block->isUsed = 1;
-			strncpy((char*)block->data + block_offset, buf + (size - size_remaining), write_amount);
-			block_write(((Inode*)node)->direct_blocks[block_number], block);
-			free(block);
-			
-			dataNode* test = malloc(BLOCK_SIZE);
-			block_read(((Inode*)node)->direct_blocks[block_number], test);
-			log_msg("Test %s\n", test);
-			free(test);
-		}
-		block_offset = 0;
-		size_remaining -=write_amount;
-		retstat += write_amount;
-		block_number++;
-	}
-	
-	log_msg("wrote %d bytes \n", retstat);
+            path, buf, size, offset, fi);
+
     return retstat;
 }
 
@@ -1071,6 +822,21 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
     int retstat = 0;
     log_msg("\nsfs_readdir(path=\"%s\", buf=0x%08x, filler=0x%08x, offset=%lld, fi=0x%08x)\n",
             path, buf, filler, offset, fi);
+
+    char *c;
+    char *tmp;
+    while ((c = strchr(path, '.')) != NULL)
+    {
+        printf("is dir\n");
+        tmp = path;
+        char buffer[PATH_MAX];
+        bzero(buffer, PATH_MAX);
+        strncpy(buffer, path, (strlen(path) - strlen(c)));
+        strcat(buffer, c + 1);
+        bzero(tmp, strlen(tmp));
+        strcpy(tmp, buffer);
+    }
+    strcat(tmp, "/");
 
     filler(buf, ".", NULL, 0);
     filler(buf, "..", NULL, 0);
