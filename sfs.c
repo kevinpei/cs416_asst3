@@ -260,12 +260,29 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n",
             path, statbuf);
 
+    if (statbuf->st_mode == S_IFREG)
+    {
+        printf("it's a file\n");
+    }
+
+    if (statbuf->st_mode == S_IFDIR)
+    {
+        printf("it's a directory\n");
+    }
+
     Inode *file_info = get_inode(path);
     if (file_info == NULL)
     {
-        struct fuse_file_info *fi = (struct fuse_file_info *)malloc(sizeof(struct fuse_file_info));
-        retstat = sfs_create(path, 777, fi);
-        retstat = sfs_release(path, fi);
+        if (path[strlen(path) - 1] == '/')
+        {
+            sfs_mkdir(path, 777);
+        }
+        else
+        {
+            struct fuse_file_info *fi = (struct fuse_file_info *)malloc(sizeof(struct fuse_file_info));
+            retstat = sfs_create(path, 777, fi);
+            retstat = sfs_release(path, fi);
+        }
         if (retstat != 0)
         {
             return retstat;
@@ -345,14 +362,15 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if (path[strlen(path) - 1] == '/')
     {
         fi->nonseekable = 1;
+        fi->fh = 0;
     }
     else
     {
         fi->nonseekable = 0;
+        file_handle++;
+        fi->fh = file_handle;
     }
     fi->lock_owner = fuse_get_context()->uid;
-    file_handle++;
-    fi->fh = file_handle;
 
     return retstat;
 }
@@ -641,6 +659,47 @@ int sfs_mkdir(const char *path, mode_t mode)
     log_msg("\nsfs_mkdir(path=\"%s\", mode=0%3o)\n",
             path, mode);
 
+    int firstFreeNode = getFirstFreeNode();
+    // printf("index of inode for new file: %d\n", firstFreeNode);
+    //No more space to create more files. Operation failed.
+    if (firstFreeNode < 0)
+    {
+        return -1;
+    }
+    char buffer[BLOCK_SIZE];
+    bzero(buffer, BLOCK_SIZE);
+    Inode *newfile = (Inode *)buffer;
+    newfile->mode = 1;
+    newfile->owner = fuse_get_context()->uid;
+    newfile->groupid = fuse_get_context()->gid;
+    newfile->permissions = mode;
+    newfile->timestamp = time(NULL);
+    newfile->filesize = 0;
+    strcpy(newfile->file_path, path);
+    block_write(firstFreeNode, buffer);
+
+    // record the file in the directory
+    char dir_name[PATH_MAX];
+    bzero(dir_name, PATH_MAX);
+    strncpy(dir_name, path, (strrchr(path, '/') - path + 1));
+    // printf("create file in directory: %s\n", dir_name);
+    Inode *dir_node = get_inode(dir_name);
+    int k;
+    for (k = 0; k < sizeof(dir_node->direct_blocks) / sizeof(int); k++)
+    {
+        if (dir_node->direct_blocks[k] == 0)
+        {
+            dir_node->direct_blocks[k] = firstFreeNode;
+            break;
+        }
+    }
+    int dir_node_index = getINode(dir_name);
+    // printf("index of inode for directory: %d\n", dir_node_index);
+    block_write(dir_node_index, dir_node);
+    free(dir_node);
+
+    print_all_inodes();
+
     return retstat;
 }
 
@@ -650,6 +709,55 @@ int sfs_rmdir(const char *path)
     int retstat = 0;
     log_msg("sfs_rmdir(path=\"%s\")\n",
             path);
+
+    Inode *inode = get_inode(path);
+    int k;
+    char buffer[BLOCK_SIZE];
+    bzero(buffer, BLOCK_SIZE);
+    for (k = 0; k < sizeof(inode->direct_blocks) / sizeof(int); k++)
+    {
+        if (inode->direct_blocks[k] != 0)
+        {
+            printf("only empty directory can be removed\n");
+            return -1;
+        }
+    }
+
+    if (inode->single_indirect_blocks != 0)
+    {
+        printf("only empty directory can be removed\n");
+        return -1;
+    }
+
+    if (inode->double_indirect_blocks != 0)
+    {
+        printf("only empty directory can be removed\n");
+        return -1;
+    }
+    free(inode);
+
+    int inode_index = getINode(path);
+    block_write(inode_index, buffer);
+
+    // remove file from directory
+    char dir_name[PATH_MAX];
+    bzero(dir_name, PATH_MAX);
+    strncpy(dir_name, path, (strrchr(path, '/') - path + 1));
+    // printf("remove file in directory: %s\n", dir_name);
+    Inode *dir_node = get_inode(dir_name);
+    for (k = 0; k < sizeof(dir_node->direct_blocks) / sizeof(int); k++)
+    {
+        if (dir_node->direct_blocks[k] == inode_index)
+        {
+            dir_node->direct_blocks[k] = 0;
+            break;
+        }
+    }
+    int dir_node_index = getINode(dir_name);
+    block_write(dir_node_index, dir_node);
+    free(dir_node);
+
+    print_all_inodes();
 
     return retstat;
 }
@@ -698,6 +806,8 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
     log_msg("\nsfs_readdir(path=\"%s\", buf=0x%08x, filler=0x%08x, offset=%lld, fi=0x%08x)\n",
             path, buf, filler, offset, fi);
 
+    filler(buf, ".", NULL, 0);
+    filler(buf, "..", NULL, 0);
     Inode *inode = get_inode(path);
     int k;
     if (inode == NULL)
@@ -722,9 +832,19 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
             retstat = get_file_stat(file_info, statbuf);
             // printf("about to fill from direct blocks\n");
             // getchar();
-            filler(buf, file_info->file_path, NULL, 0);
+            char file_name[PATH_MAX];
+            bzero(file_name, PATH_MAX);
+            strncpy(file_name, file_info->file_path + strlen(path), strlen(file_info->file_path) - strlen(path));
+            printf("about to fill file \"%s\"\n", file_name);
+            int retval = filler(buf, file_name, NULL, offset);
+            if (retval == 1)
+            {
+                printf("buffer is full\n");
+                break;
+            }
         }
     }
+    // printf("finish filling direct blocks\n");
 
     if (inode->single_indirect_blocks != 0)
     {
@@ -738,12 +858,26 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
             {
                 char buffer[BLOCK_SIZE];
                 bzero(buffer, BLOCK_SIZE);
-                block_read(direct_pnode->direct_blocks[k], buffer);
+                block_read(inode->direct_blocks[k], buffer);
                 Inode *file_info = (Inode *)buffer;
+                // printf("file found. print inode:\n");
+                // print_inode(file_info);
                 char statbuf[sizeof(struct stat)];
                 bzero(statbuf, sizeof(struct stat));
                 retstat = get_file_stat(file_info, statbuf);
-                filler(buf, file_info->file_path, NULL, 0);
+                // printf("about to fill from direct blocks\n");
+                // getchar();
+                char file_name[PATH_MAX];
+                bzero(file_name, PATH_MAX);
+                char *name = strrchr(path, '/') + 1;
+                // strcpy(file_name, ".");
+                strncpy(file_name, name, strlen(file_info->file_path) - strlen(path));
+                int retval = filler(buf, file_name, NULL, offset);
+                if (retval == 1)
+                {
+                    printf("buffer is full\n");
+                    break;
+                }
             }
         }
     }
@@ -768,12 +902,26 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
                     {
                         char buffer[BLOCK_SIZE];
                         bzero(buffer, BLOCK_SIZE);
-                        block_read(direct_pnode->direct_blocks[k], buffer);
+                        block_read(inode->direct_blocks[k], buffer);
                         Inode *file_info = (Inode *)buffer;
+                        // printf("file found. print inode:\n");
+                        // print_inode(file_info);
                         char statbuf[sizeof(struct stat)];
                         bzero(statbuf, sizeof(struct stat));
                         retstat = get_file_stat(file_info, statbuf);
-                        filler(buf, file_info->file_path, NULL, 0);
+                        // printf("about to fill from direct blocks\n");
+                        // getchar();
+                        char file_name[PATH_MAX];
+                        bzero(file_name, PATH_MAX);
+                        char *name = strrchr(path, '/') + 1;
+                        // strcpy(file_name, ".");
+                        strncpy(file_name, name, strlen(file_info->file_path) - strlen(path));
+                        int retval = filler(buf, file_name, NULL, offset);
+                        if (retval == 1)
+                        {
+                            printf("buffer is full\n");
+                            break;
+                        }
                     }
                 }
             }
@@ -792,6 +940,8 @@ int sfs_releasedir(const char *path, struct fuse_file_info *fi)
     int retstat = 0;
     log_msg("\nsfs_releasedir(path=\"%s\", fi=0x%08x)\n",
             path, fi);
+
+    fi->fh = 0;
 
     return retstat;
 }
