@@ -39,23 +39,20 @@ static uint64_t file_handle = 0;
 
 int getINode(char *path)
 {
-    char *node = malloc(BLOCK_SIZE);
+    char node[BLOCK_SIZE];
+    bzero(node, BLOCK_SIZE);
     int i = 0;
-    disk_open(FS_FILE);
     while (i < INODE_NUMBER)
     {
         block_read(i, node);
-        //Make sure it's an Inode, the file path is the same as the one given, and that the owner is the current user
-        if (((Inode *)node)->mode == 1 && strncmp(((Inode *)node)->file_path, path, PATH_MAX) == 0 && ((Inode *)node)->owner == getuid() && ((Inode *)node)->groupid == getgid())
+        Inode *inode = (Inode *)node;
+        //Make sure it's an Inode, the file path is the same as the one given
+        if ((strncmp(inode->file_path, path, strlen(path)) == 0) && ((strlen(path) == PATH_MAX) || (inode->file_path[strlen(path)] == NULL)))
         {
-            free(node);
-            disk_close();
             return i;
         }
         i++;
     }
-    free(node);
-    disk_close();
     return -1;
 }
 
@@ -63,16 +60,14 @@ int getINode(char *path)
 int getFirstFreeBlock()
 {
     int currentBlock = INODE_NUMBER + 1;
-    char *block = malloc(BLOCK_SIZE);
-    disk_open(FS_FILE);
+    char block[BLOCK_SIZE];
+    bzero(block, BLOCK_SIZE);
     block_read(currentBlock, block);
     while (((dataNode *)block)->isFree == 1)
     {
         currentBlock++;
         block_read(currentBlock, block);
     }
-    disk_close();
-    free(block);
     return currentBlock;
 }
 
@@ -80,16 +75,15 @@ int getFirstFreeBlock()
 int getFirstFreeNode()
 {
     int currentBlock = 0;
-    char *block = malloc(BLOCK_SIZE);
-    disk_open(FS_FILE);
+    char block[BLOCK_SIZE];
+    bzero(block, BLOCK_SIZE);
     block_read(currentBlock, block);
     while (((Inode *)block)->mode != 0 && currentBlock < 30000)
     {
         currentBlock++;
         block_read(currentBlock, block);
     }
-    disk_close();
-    free(block);
+
     if (currentBlock >= 30000)
     {
         printf("No more free nodes\n");
@@ -121,9 +115,24 @@ void print_inode(const Inode *inode)
     printf("------------------\n");
 }
 
+void print_all_inodes()
+{
+    int k;
+    for (k = 0; k < INODE_NUMBER; k++)
+    {
+        char buffer[BLOCK_SIZE];
+        bzero(buffer, BLOCK_SIZE);
+        block_read(k, buffer);
+        Inode *inode = (Inode *)buffer;
+        if (inode->mode == 1)
+        {
+            print_inode((Inode *)buffer);
+        }
+    }
+}
+
 Inode *get_inode(const char *path)
 {
-    disk_open(FS_FILE);
     int k;
     // printf("searching file: %s\n", path);
     Inode *inode = (Inode *)malloc(BLOCK_SIZE);
@@ -254,12 +263,23 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     Inode *file_info = get_inode(path);
     if (file_info == NULL)
     {
-        return NULL;
+        struct fuse_file_info *fi = (struct fuse_file_info *)malloc(sizeof(struct fuse_file_info));
+        retstat = sfs_create(path, 777, fi);
+        retstat = sfs_release(path, fi);
+        if (retstat != 0)
+        {
+            return retstat;
+        }
+        else
+        {
+            return sfs_getattr(path, statbuf);
+        }
     }
-
-    retstat = get_file_stat(file_info, statbuf);
-
-    free(file_info);
+    else
+    {
+        retstat = get_file_stat(file_info, statbuf);
+        free(file_info);
+    }
     return retstat;
 }
 
@@ -281,33 +301,58 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     log_msg("\nsfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n",
             path, mode, fi);
 
-    int InodeBlock = getINode(path);
-    //If the file doesn't already exist, then create a new one and write it in the file blocks.
-    if (InodeBlock == -1)
+    int firstFreeNode = getFirstFreeNode();
+    // printf("index of inode for new file: %d\n", firstFreeNode);
+    //No more space to create more files. Operation failed.
+    if (firstFreeNode < 0)
     {
-        int firstFreeNode = getFirstFreeNode();
-
-        //No more space to create more files. Operation failed.
-        if (firstFreeNode < 0)
-        {
-            return -1;
-        }
-        Inode *newfile = malloc(BLOCK_SIZE);
-        newfile->mode = 1;
-        newfile->owner = getuid();
-        newfile->groupid = getgid();
-        newfile->permissions = mode;
-        newfile->timestamp = time(NULL);
-        newfile->filesize = 0;
-        strncpy(newfile->file_path, path, PATH_MAX);
-
-        disk_open(FS_FILE);
-        block_write(firstFreeNode, newfile);
-        disk_close();
-        free(newfile);
+        return -1;
     }
+    char buffer[BLOCK_SIZE];
+    bzero(buffer, BLOCK_SIZE);
+    Inode *newfile = (Inode *)buffer;
+    newfile->mode = 1;
+    newfile->owner = fuse_get_context()->uid;
+    newfile->groupid = fuse_get_context()->gid;
+    newfile->permissions = mode;
+    newfile->timestamp = time(NULL);
+    newfile->filesize = 0;
+    strcpy(newfile->file_path, path);
+    block_write(firstFreeNode, buffer);
 
-    sfs_open(path, fi);
+    // record the file in the directory
+    char dir_name[PATH_MAX];
+    bzero(dir_name, PATH_MAX);
+    strncpy(dir_name, path, (strrchr(path, '/') - path + 1));
+    // printf("create file in directory: %s\n", dir_name);
+    Inode *dir_node = get_inode(dir_name);
+    int k;
+    for (k = 0; k < sizeof(dir_node->direct_blocks) / sizeof(int); k++)
+    {
+        if (dir_node->direct_blocks[k] == 0)
+        {
+            dir_node->direct_blocks[k] = firstFreeNode;
+            break;
+        }
+    }
+    int dir_node_index = getINode(dir_name);
+    // printf("index of inode for directory: %d\n", dir_node_index);
+    block_write(dir_node_index, dir_node);
+    free(dir_node);
+
+    print_all_inodes();
+
+    if (path[strlen(path) - 1] == '/')
+    {
+        fi->nonseekable = 1;
+    }
+    else
+    {
+        fi->nonseekable = 0;
+    }
+    fi->lock_owner = fuse_get_context()->uid;
+    file_handle++;
+    fi->fh = file_handle;
 
     return retstat;
 }
@@ -366,6 +411,30 @@ int sfs_unlink(const char *path)
             }
         }
     }
+    free(inode);
+
+    int inode_index = getINode(path);
+    block_write(inode_index, buffer);
+
+    // remove file from directory
+    char dir_name[PATH_MAX];
+    bzero(dir_name, PATH_MAX);
+    strncpy(dir_name, path, (strrchr(path, '/') - path + 1));
+    // printf("remove file in directory: %s\n", dir_name);
+    Inode *dir_node = get_inode(dir_name);
+    for (k = 0; k < sizeof(dir_node->direct_blocks) / sizeof(int); k++)
+    {
+        if (dir_node->direct_blocks[k] == inode_index)
+        {
+            dir_node->direct_blocks[k] = 0;
+            break;
+        }
+    }
+    int dir_node_index = getINode(dir_name);
+    block_write(dir_node_index, dir_node);
+    free(dir_node);
+
+    print_all_inodes();
 
     return retstat;
 }
@@ -387,17 +456,29 @@ int sfs_open(const char *path, struct fuse_file_info *fi)
             path, fi);
 
     Inode *inode = get_inode(path);
-    if (path[strlen(path) - 1] == '/')
+    if (inode == NULL)
     {
         fi->nonseekable = 1;
+        fi->fh = 0;
     }
-    fi->lock_owner = inode->owner;
-    if (fi->fh == 0)
+    else
     {
-        file_handle++;
-        fi->fh = file_handle;
+        if (path[strlen(path) - 1] == '/')
+        {
+            fi->nonseekable = 1;
+        }
+        else
+        {
+            fi->nonseekable = 0;
+        }
+        fi->lock_owner = inode->owner;
+        if (fi->fh == 0)
+        {
+            file_handle++;
+            fi->fh = file_handle;
+        }
     }
-
+    free(inode);
     return retstat;
 }
 
@@ -451,7 +532,6 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
         return -1;
     }
     char *node = malloc(BLOCK_SIZE);
-    disk_open(FS_FILE);
     block_read(nodeBlock, node);
 
     //Which block to read from and where to start in that block
@@ -530,7 +610,7 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
         block_number++;
         free(block);
     }
-    disk_close();
+
     free(node);
 
     return retstat;
@@ -615,9 +695,18 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
                 struct fuse_file_info *fi)
 {
     int retstat = 0;
+    log_msg("\nsfs_readdir(path=\"%s\", buf=0x%08x, filler=0x%08x, offset=%lld, fi=0x%08x)\n",
+            path, buf, filler, offset, fi);
 
     Inode *inode = get_inode(path);
     int k;
+    if (inode == NULL)
+    {
+        printf("directory \"%s\" does not exist\n", path);
+        return retstat;
+    }
+    // printf("about to iterate direct blocks\n");
+    // getchar();
     for (k = 0; k < sizeof(inode->direct_blocks) / sizeof(int); k++)
     {
         if (inode->direct_blocks[k] != 0)
@@ -625,9 +714,14 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
             char buffer[BLOCK_SIZE];
             block_read(inode->direct_blocks[k], buffer);
             Inode *file_info = (Inode *)buffer;
-            struct stat *statbuf;
+            // printf("file found. print inode:\n");
+            // print_inode(file_info);
+            char statbuf[sizeof(struct stat)];
+            bzero(statbuf, sizeof(struct stat));
             retstat = get_file_stat(file_info, statbuf);
-            filler(buf, path, statbuf, 0);
+            // printf("about to fill from direct blocks\n");
+            // getchar();
+            filler(buf, file_info->file_path, statbuf, 0);
         }
     }
 
@@ -643,9 +737,10 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
                 char buffer[BLOCK_SIZE];
                 block_read(direct_pnode->direct_blocks[k], buffer);
                 Inode *file_info = (Inode *)buffer;
-                struct stat *statbuf;
+                char statbuf[sizeof(struct stat)];
+                bzero(statbuf, sizeof(struct stat));
                 retstat = get_file_stat(file_info, statbuf);
-                filler(buf, path, statbuf, 0);
+                filler(buf, file_info->file_path, statbuf, 0);
             }
         }
     }
@@ -669,15 +764,16 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
                         char buffer[BLOCK_SIZE];
                         block_read(direct_pnode->direct_blocks[k], buffer);
                         Inode *file_info = (Inode *)buffer;
-                        struct stat *statbuf;
+                        char statbuf[sizeof(struct stat)];
+                        bzero(statbuf, sizeof(struct stat));
                         retstat = get_file_stat(file_info, statbuf);
-                        filler(buf, path, statbuf, 0);
+                        filler(buf, file_info->file_path, statbuf, 0);
                     }
                 }
             }
         }
     }
-
+    free(inode);
     return retstat;
 }
 
@@ -688,6 +784,8 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
 int sfs_releasedir(const char *path, struct fuse_file_info *fi)
 {
     int retstat = 0;
+    log_msg("\nsfs_releasedir(path=\"%s\", fi=0x%08x)\n",
+            path, fi);
 
     return retstat;
 }
