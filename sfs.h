@@ -6,7 +6,7 @@
 
 #include "block.h"
 
-#define FS_FILE "/tmp/mm2180/testfsfile" // location of the disk file
+#define FS_FILE "/tmp/ksp98/testfsfile" // location of the disk file
 #define PATH_MAX 256                     // max length of full file path
 #define INODE_NUMBER 30000               // number of inode allowed
 //Defining the size of various things
@@ -37,7 +37,7 @@ typedef struct inode_
 
 typedef struct dataNode_
 {
-    char isFree;          //0 for free data, 1 for used data
+    char isUsed;          //0 for free data, 1 for used data
     char data[data_size]; //The rest of the bytes are for storing actual data
 } dataNode;
 
